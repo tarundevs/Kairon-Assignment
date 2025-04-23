@@ -25,10 +25,6 @@ class RAGResearchState(BaseModel):
     sources: List[str] = Field(default_factory=list)
     answer: str = ""
 
-# Set up environment variables for API keys
-os.environ["TAVILY_API_KEY"] = "tavily api key"  # Using the provided free API key
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = "hf api key"  # Using the provided free API token
-
 # Initialize LLM - using a free model from HuggingFace
 llm = HuggingFaceHub(
     repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
