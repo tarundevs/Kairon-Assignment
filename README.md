@@ -1,73 +1,106 @@
-RAG Research Workflow
-Overview
-This project implements a Retrieval-Augmented Generation (RAG) research workflow using LangChain and LangGraph. It automates the process of researching a user-provided question by generating search queries, performing web searches, building a vector database, retrieving relevant context, analyzing results, and drafting a comprehensive answer.
-Features
+# Deep research AI Agent
 
-Query Generation: Generates diverse search queries to explore different aspects of the research question.
-Web Search: Uses the Tavily search tool to gather relevant web results.
-Vector Database: Stores processed search results in a Chroma vector database for efficient retrieval.
-Context Retrieval: Retrieves the most relevant documents from the vector database using similarity search.
-Result Analysis: Extracts key insights, themes, and sources from search results and retrieved context.
-Answer Drafting: Produces a well-structured, 300-400 word answer with citations.
+A powerful research Agent that leverages Retrieval-Augmented Generation (RAG) and dual agent architecture to answer research questions with comprehensive, sourced responses.
 
-Requirements
+## Overview
 
-Python 3.8+
-Required libraries (install via pip):pip install langchain langchain-tavily langchain-huggingface pydantic chromadb langgraph
+This system combines web search, vector database retrieval, and advanced language models to:
 
+1. Generate targeted search queries based on your question
+2. Retrieve relevant information from the web
+3. Store and index information in a vector database
+4. Extract key insights and themes
+5. Synthesize a comprehensive answer with citations
 
-API keys:
-HuggingFace Hub API key for the language model.
-Tavily API key for web search.
+## Features
 
+- **Multi-query search**: Generates multiple diversified search queries to explore different aspects of your question
+- **Information extraction**: Processes search results into a structured database
+- **Vector similarity search**: Finds the most relevant context for your specific question
+- **Insight analysis**: Identifies key insights and themes from the research
+- **Source tracking**: Maintains attribution to original sources
+- **Comprehensive answers**: Generates well-structured responses with proper citations
 
-Set environment variables:export HUGGINGFACEHUB_API_TOKEN='your-huggingface-token'
-export TAVILY_API_KEY='your-tavily-token'
+## Setup
 
+### Prerequisites
 
+- Python 3.8+
+- Tavily API key (for web search)
+- HuggingFace API token (for language model access)
 
-Usage
+### Installation
 
-Clone the repository:git clone <repository-url>
-cd <repository-directory>
+1. Clone this repository
+2. Install required packages:
 
+```bash
+pip install langchain langchain_tavily langgraph pydantic huggingface-hub chromadb sentence-transformers
+```
 
-Install dependencies:pip install -r requirements.txt
+3. Set up environment variables:
 
+```bash
+export TAVILY_API_KEY="your_tavily_api_key"
+export HUGGINGFACEHUB_API_TOKEN="your_huggingface_token"
+```
 
-Run the script:python main.py
+## Usage
 
+```python
+from rag_research import run_research
 
-Enter a research question when prompted, or use the default question ("What are the latest developments in nuclear fusion technology?").
+# Run a research query
+result = run_research("What are the latest developments in nuclear fusion technology?")
 
-Code Structure
+# Access the structured results
+print(result.answer)
+print(result.insights)
+print(result.sources)
+```
 
-main.py: Contains the core RAG workflow implementation, including:
-RAGResearchState: Pydantic model for tracking research state.
-Node functions (generate_queries, perform_searches, etc.) for each workflow step.
-create_research_graph: Defines the LangGraph workflow.
-run_research: Executes the full research pipeline.
+## Architecture
 
+This system uses LangGraph to orchestrate a workflow of specialized components:
 
-Chroma Database: Persists vector embeddings in ./chroma_db.
+1. **Query Generation**: Creates diverse search queries from your question
+2. **Web Search**: Retrieves information from the web using Tavily
+3. **RAG Database**: Processes search results into chunks and stores them
+4. **Context Retrieval**: Finds the most relevant information for your question
+5. **Result Analysis**: Identifies key insights and themes from the research
+6. **Answer Generation**: Synthesizes a comprehensive response with citations
 
-Example
-question = "What are the latest developments in nuclear fusion technology?"
-final_state = run_research(question)
-print(final_state.answer)
+## Model Information
 
-Output
-The script outputs:
+- **Language Model**: Mixtral-8x7B-Instruct-v0.1 (via HuggingFace Hub)
+- **Embedding Model**: sentence-transformers/all-MiniLM-L6-v2
+- **Vector Database**: Chroma (with persistent storage)
 
-The research question and generated queries.
-A list of unique sources found.
-A comprehensive answer with citations, incorporating insights and themes.
+## Customization
 
-Notes
+You can modify various parameters to customize the research process:
 
-The workflow uses the mistralai/Mixtral-8x7B-Instruct-v0.1 model from HuggingFace for language tasks and sentence-transformers/all-MiniLM-L6-v2 for embeddings.
-Error handling ensures robustness, with fallback mechanisms for query generation and answer drafting.
-The Chroma vector database persists data automatically, but ensure the ./chroma_db directory is writable.
+- Change the LLM by updating the `repo_id` in the `HuggingFaceHub` initialization
+- Adjust search depth by modifying `max_results` in `TavilySearch`
+- Change text chunking parameters in `RecursiveCharacterTextSplitter`
+- Modify vector search parameters in the `similarity_search` method
 
-License
-This project is licensed under the MIT License.
+## Error Handling
+
+The system includes robust error handling:
+- Fallback query generation if the LLM response cannot be parsed
+- Multiple JSON extraction strategies for handling different LLM output formats
+- Exception handling at each pipeline stage
+- Graceful degradation when components fail
+
+## Limitations
+
+- Limited by the quality and recency of web search results
+- Performance depends on the capabilities of the underlying language model
+- Research quality may vary based on the specificity and complexity of the question
+
+This project uses several open-source libraries:
+- LangChain and LangGraph for orchestration
+- HuggingFace for model access
+- Tavily for web search capabilities
+- ChromaDB for vector storage
