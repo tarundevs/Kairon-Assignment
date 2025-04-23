@@ -4,7 +4,7 @@ import re
 import json
 from pydantic import BaseModel, Field
 
-# LangChain imports
+# LangChain imports for search, LLM, embeddings, and vector store
 from langchain_tavily import TavilySearch
 from langchain.llms import HuggingFaceHub
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -13,7 +13,7 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langgraph.graph import StateGraph
 
-# Define the RAG state model
+# Define the state model to track research progress
 class RAGResearchState(BaseModel):
     question: str
     queries: List[str] = Field(default_factory=list)
@@ -25,42 +25,44 @@ class RAGResearchState(BaseModel):
     sources: List[str] = Field(default_factory=list)
     answer: str = ""
 
-# Initialize LLM - using a free model from HuggingFace
+# Initialize the language model using HuggingFace's Mixtral
 llm = HuggingFaceHub(
     repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
     model_kwargs={"temperature": 0.2, "max_length": 500}
 )
 
-# Use a sentence transformer model for embeddings
+# Set up embeddings for document vectorization
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-# Initialize search tool
+# Initialize Tavily search tool for web queries
 tavily_tool = TavilySearch(max_results=5)
 
-# Initialize text splitter for chunking documents
+# Set up text splitter to chunk documents for vector store
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
     chunk_overlap=50
 )
 
-# Initialize vector database
+# Initialize Chroma vector database for storing documents
 db = Chroma(embedding_function=embeddings, persist_directory="./chroma_db")
 
-# Helper function to safely extract JSON from LLM responses
+# Helper function to extract JSON from LLM responses
 def extract_json_from_response(response: str) -> dict:
     """
-    Safely extract JSON from LLM responses using multiple strategies.
+    Attempts to extract JSON from LLM response using multiple strategies.
+    Returns extracted data or an empty dict if all strategies fail.
     """
-    # Strategy 1: Look for JSON after "Output JSON:"
+    
+    # Try extracting JSON after "Output JSON:" marker
     try:
         output_section = response.split("Output JSON:")[-1].strip()
         return json.loads(output_section)
     except (IndexError, json.JSONDecodeError) as e:
         print(f"Strategy 1 failed: {e}")
     
-    # Strategy 2: Look for JSON between curly braces
+    # Look for JSON content between curly braces
     json_pattern = r'\{.*\}'
     match = re.search(json_pattern, response, re.DOTALL)
     if match:
@@ -70,7 +72,7 @@ def extract_json_from_response(response: str) -> dict:
         except json.JSONDecodeError as e:
             print(f"Strategy 2 failed: {e}")
     
-    # Strategy 3: Extract queries specifically
+    # Extract queries specifically if JSON extraction fails
     queries_pattern = r'"queries"\s*:\s*\[(.*?)\]'
     match = re.search(queries_pattern, response, re.DOTALL)
     if match:
@@ -79,7 +81,7 @@ def extract_json_from_response(response: str) -> dict:
         if queries:
             return {"queries": queries}
     
-    # Strategy 4: Extract insights, themes, sources if available
+    # Extract insights, themes, or sources if available
     insights = []
     insights_pattern = r'"insights"\s*:\s*\[(.*?)\]'
     match = re.search(insights_pattern, response, re.DOTALL)
@@ -107,12 +109,10 @@ def extract_json_from_response(response: str) -> dict:
             "themes": themes,
             "sources": sources
         }
-    
-    # Log failure and return empty results
     print("All JSON extraction strategies failed")
     return {}
 
-# Research Agent Nodes
+# Generate search queries based on the input question
 def generate_queries(state: RAGResearchState) -> RAGResearchState:
     """Generate search queries based on the input question"""
     prompt = f"""
@@ -145,18 +145,15 @@ def generate_queries(state: RAGResearchState) -> RAGResearchState:
         response = llm.invoke(prompt)
         print(f"Query generation response:\n{response}")
         
-        # Extract JSON data from the response
+        # Extract and validate queries from response
         data = extract_json_from_response(response)
         
-        # Check if the queries key exists and has values
         if "queries" in data and isinstance(data["queries"], list) and len(data["queries"]) > 0:
             # Filter out any placeholder text that might have been copied from the prompt
             filtered_queries = [
                 q for q in data["queries"] 
-                # if q and "your" not in q.lower() and "first" not in q.lower() and "second" not in q.lower()
             ]
             
-            # Use filtered queries if available, otherwise use all extracted queries
             if filtered_queries:
                 state.queries = filtered_queries
             else:
@@ -180,8 +177,9 @@ def generate_queries(state: RAGResearchState) -> RAGResearchState:
         
     return state
 
+# Execute web searches for each query
 def perform_searches(state: RAGResearchState) -> RAGResearchState:
-    """Execute web searches and process results"""
+    """Run web searches and collect results."""
     all_results = []
     
     for query in state.queries:
@@ -189,7 +187,7 @@ def perform_searches(state: RAGResearchState) -> RAGResearchState:
             print(f"Searching for: {query}")
             raw_results = tavily_tool.invoke(query)
             
-            # Process and validate results
+            # Process search results
             if isinstance(raw_results, list):
                 for item in raw_results:
                     if isinstance(item, dict) and all(k in item for k in ["title", "content", "url"]):
@@ -215,13 +213,12 @@ def perform_searches(state: RAGResearchState) -> RAGResearchState:
     print(f"Found {len(state.results)} unique search results")
     return state
 
+# Convert search results into documents for vector store
 def build_rag_database(state: RAGResearchState) -> RAGResearchState:
-    """Process search results into RAG documents and store in vector database"""
+    """Process search results into documents and store in vector database."""
     documents = []
     
-    # Convert search results to documents
     for result in state.results:
-        # Create a document with metadata
         content = f"Title: {result['title']}\nContent: {result['content']}"
         metadata = {
             "url": result["url"],
@@ -229,24 +226,20 @@ def build_rag_database(state: RAGResearchState) -> RAGResearchState:
             "question": state.question
         }
         
-        # Split into chunks
         doc_chunks = text_splitter.create_documents(
             texts=[content],
             metadatas=[metadata]
         )
         documents.extend(doc_chunks)
     
-    # Store document information in state
     state.rag_documents = [
         {"content": doc.page_content, "metadata": doc.metadata} 
         for doc in documents
     ]
     
-    # Add to vector store
     if documents:
         print(f"Adding {len(documents)} documents to vector store")
         db.add_documents(documents)
-        # Note: With Chroma 0.4.x+ persistence is automatic, but we'll keep this for compatibility
         try:
             db.persist()
         except Exception as e:
@@ -256,17 +249,16 @@ def build_rag_database(state: RAGResearchState) -> RAGResearchState:
     
     return state
 
+# Retrieve relevant documents from vector store
 def retrieve_relevant_context(state: RAGResearchState) -> RAGResearchState:
-    """Retrieve relevant context from the vector database"""
+    """Fetch relevant context for the question from the vector database."""
     try:
-        # Search the vector database
         results = db.similarity_search(
             state.question,
-            k=7,  # Number of relevant documents to retrieve
-            filter=None  # Could filter by metadata if needed
+            k=7,
+            filter=None
         )
         
-        # Format retrieved documents into context
         context_parts = []
         for i, doc in enumerate(results):
             source = doc.metadata.get('url', 'Unknown')
@@ -280,8 +272,9 @@ def retrieve_relevant_context(state: RAGResearchState) -> RAGResearchState:
     
     return state
 
+# Analyze results to extract insights and themes
 def analyze_results(state: RAGResearchState) -> RAGResearchState:
-    """Analyze search results and RAG context to extract insights and themes"""
+    """Extract insights and themes from search results and context."""
     # Build a context from search results if we have them
     search_context = ""
     if state.results:
@@ -291,7 +284,6 @@ def analyze_results(state: RAGResearchState) -> RAGResearchState:
             search_summaries.append(summary)
         search_context = "\n\n".join(search_summaries)
     
-    # Create analysis prompt
     prompt = f"""
     Task: Analyze research materials on: "{state.question}"
     
@@ -334,26 +326,21 @@ def analyze_results(state: RAGResearchState) -> RAGResearchState:
         
         data = extract_json_from_response(response)
         
-        # Extract insights
         if "insights" in data and data["insights"]:
             state.insights = data["insights"]
         else:
             state.insights = ["No clear insights could be extracted from the available information."]
         
-        # Extract themes
         if "themes" in data and data["themes"]:
             state.themes = data["themes"]
         else:
             state.themes = ["Insufficient information to identify clear themes."]
         
-        # Collect all unique sources
         unique_sources = set()
         
-        # From search results
         for r in state.results:
             unique_sources.add(r["url"])
         
-        # From analysis response
         if "sources" in data and data["sources"]:
             for source in data["sources"]:
                 if isinstance(source, str) and source.startswith("http"):
@@ -366,34 +353,30 @@ def analyze_results(state: RAGResearchState) -> RAGResearchState:
         state.insights = ["Error extracting insights from the available information."]
         state.themes = ["Error identifying themes from the available information."]
         
-        # Fallback to search result URLs
         state.sources = [r["url"] for r in state.results]
     
     return state
 
+# Generate a final answer based on research
 def draft_answer(state: RAGResearchState) -> RAGResearchState:
-    """Draft a comprehensive answer using all available information"""
-    # Format insights and themes for the prompt
+    """Draft a comprehensive answer using insights, themes, and sources."""
+    
     insights_text = "\n".join([f"- {insight}" for insight in state.insights])
     themes_text = "\n".join([f"- {theme}" for theme in state.themes])
     
-    # Create a formatted list of sources with their titles if available
     sources_with_titles = []
     urls_seen = set()
     
-    # First add sources from search results (they have titles)
     for result in state.results:
         if result["url"] not in urls_seen:
             urls_seen.add(result["url"])
             sources_with_titles.append(f"{result['url']} - {result['title']}")
     
-    # Then add any remaining sources that might have been extracted
     for source in state.sources:
         if source not in urls_seen and source.startswith("http"):
             urls_seen.add(source)
             sources_with_titles.append(source)
     
-    # Format the sources for the prompt
     sources_text = ""
     for i, source in enumerate(sources_with_titles, 1):
         sources_text += f"{i}. {source}\n"
@@ -440,7 +423,7 @@ def draft_answer(state: RAGResearchState) -> RAGResearchState:
     
     return state
 
-# Create the LangGraph workflow
+# Set up the LangGraph workflow
 def create_research_graph():
     graph_builder = StateGraph(RAGResearchState)
     
@@ -465,7 +448,7 @@ def create_research_graph():
     # Compile graph
     return graph_builder.compile()
 
-# Main function to run the research
+# Run the full research workflow
 def run_research(question: str) -> RAGResearchState:
     """Run a complete research workflow for the given question"""
     print(f"\n{'='*50}")
@@ -476,11 +459,9 @@ def run_research(question: str) -> RAGResearchState:
     research_graph = create_research_graph()
     
     try:
-        # Execute the workflow
         final_state_dict = research_graph.invoke(initial_state)
         final_state = RAGResearchState(**final_state_dict)
         
-        # Print results
         print("\n=== Research Results ===")
         print(f"Question: {final_state.question}")
         print(f"\nQueries used ({len(final_state.queries)}):")
@@ -500,7 +481,6 @@ def run_research(question: str) -> RAGResearchState:
         print(f"Error during research workflow: {e}")
         return initial_state
 
-# Example usage
 if __name__ == "__main__":
     question = input("Enter your research question: ")
     if not question:
